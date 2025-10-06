@@ -25,6 +25,7 @@ void PlaneExtractor::groupPointsByLabel() {
     }
 }
 
+
 void PlaneExtractor::buildAdjacencyGraph() {
     std::cout << "Step 2: Building plane adjacency graph from input mesh..." << std::endl;
     for (const auto& face : faces_) {
