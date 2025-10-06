@@ -1,0 +1,3 @@
+/Users/jun/PhD2/PlaneExtractfromOBJ/build/CMakeFiles/plane_extractor_app.dir
+/Users/jun/PhD2/PlaneExtractfromOBJ/build/CMakeFiles/edit_cache.dir
+/Users/jun/PhD2/PlaneExtractfromOBJ/build/CMakeFiles/rebuild_cache.dir

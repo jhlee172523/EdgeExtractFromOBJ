@@ -1,0 +1,2 @@
+set(__QT_DEPLOY_TARGET_plane_extractor_app_FILE /Users/jun/PhD2/PlaneExtractfromOBJ/build/plane_extractor_app)
+set(__QT_DEPLOY_TARGET_plane_extractor_app_TYPE EXECUTABLE)
