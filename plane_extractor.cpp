@@ -28,6 +28,7 @@ void PlaneExtractor::groupPointsByLabel() {
 
 void PlaneExtractor::buildAdjacencyGraph() {
     std::cout << "Step 2: Building plane adjacency graph from input mesh..." << std::endl;
+    /*
     for (const auto& face : faces_) {
         // label ID from vertices of plane
         int label1 = vertices_[face.vertex_indices[0]].label_id;
@@ -45,6 +46,42 @@ void PlaneExtractor::buildAdjacencyGraph() {
         add_edge(label1, label3);
         add_edge(label2, label3);
     }
+    */
+    
+    // 1단계: 두 라벨 사이의 공유 엣지 개수를 센다.
+    // std::map<정렬된 라벨 쌍, 엣지 개수>
+    std::map<std::pair<int, int>, int> edge_counts;
+
+    for (const auto& face : faces_) {
+        for (int i = 0; i < 3; ++i) {
+            int v1_idx = face.vertex_indices[i];
+            int v2_idx = face.vertex_indices[(i + 1) % 3]; // 면의 다음 정점
+
+            int label1 = vertices_[v1_idx].label_id;
+            int label2 = vertices_[v2_idx].label_id;
+
+            if (label1 != label2) {
+                // 항상 (작은 라벨, 큰 라벨) 순서로 키를 만들어 중복을 방지합니다.
+                if (label1 > label2) std::swap(label1, label2);
+                edge_counts[{label1, label2}]++;
+            }
+        }
+    }
+
+    // 2단계: 엣지 개수가 임계값을 넘는 경우에만 최종 인접 그래프에 추가한다.
+    const int adjacency_threshold = 10; // 임계값. 10개 이상의 엣지를 공유해야 인접한 것으로 간주.
+                                        // 이 값을 조절하여 인접성의 강도를 제어할 수 있습니다.
+
+    std::cout << "Filtering adjacencies with threshold: " << adjacency_threshold << " shared edges" << std::endl;
+
+    for (const auto& [labels, count] : edge_counts) {
+        if (count >= adjacency_threshold) {
+            int label1 = labels.first;
+            int label2 = labels.second;
+            plane_adjacency_graph_[label1].insert(label2);
+            plane_adjacency_graph_[label2].insert(label1);
+        }
+    }
 
     // return result(graph)
     std::cout << "Label Adjacency Graph:" << std::endl;
@@ -61,7 +98,7 @@ void PlaneExtractor::buildAdjacencyGraph() {
 void PlaneExtractor::detectPlanes(double distance_threshold) {
     std::cout << "Step 3: Detecting one plane per label group using RANSAC..." << std::endl;
     for (auto const& [label_id, cloud] : grouped_points_by_label_) {
-        if (cloud->points.size() < 3) continue; // 평면을 정의하기에 점이 너무 적음
+        if (cloud->points.size() < 10) continue; // 평면을 정의하기에 점이 너무 적음
 
         pcl::ModelCoefficients::Ptr coefficients(new pcl::ModelCoefficients);
         pcl::PointIndices::Ptr inliers(new pcl::PointIndices);
@@ -100,7 +137,7 @@ void PlaneExtractor::detectPlanes(double distance_threshold) {
     }
     std::cout << "Detected " << planes_by_label_.size() << " planes." << std::endl;
 }
-
+/*
 void PlaneExtractor::calculateIntersectionEdges() {
     std::cout << "Step 4: Calculating intersection edges for adjacent planes..." << std::endl;
     
@@ -140,6 +177,83 @@ void PlaneExtractor::calculateIntersectionEdges() {
                 double min_proj = std::numeric_limits<double>::max();
                 double max_proj = std::numeric_limits<double>::lowest();
                 for (const auto& pt : combined_cloud->points) {
+                    Eigen::Vector3d p(pt.x, pt.y, pt.z);
+                    double proj = (p - p0).dot(dir);
+                    min_proj = std::min(min_proj, proj);
+                    max_proj = std::max(max_proj, proj);
+                }
+
+                if (min_proj < max_proj) {
+                    Eigen::Vector3d start_pt = p0 + min_proj * dir;
+                    Eigen::Vector3d end_pt = p0 + max_proj * dir;
+                    intersection_edges_.push_back({start_pt, end_pt});
+                }
+            }
+        }
+    }
+}
+*/
+
+/**
+ * @brief 인접한 평면들 사이의 교선을 "근접 영역 클리핑"을 이용해 정확하게 계산합니다.
+ */
+void PlaneExtractor::calculateIntersectionEdges() {
+    std::cout << "Step 4: Calculating intersection edges for adjacent planes using vicinity clipping..." << std::endl;
+    
+    // 근접 영역을 정의하기 위한 거리 임계값. RANSAC 임계값의 몇 배 정도로 설정하면 좋습니다.
+    const double clipping_vicinity_threshold = 0.1; // 10cm 이내
+
+    // 라벨 인접 그래프를 순회하며 교선을 계산합니다.
+    for (const auto& [label1, neighbors] : plane_adjacency_graph_) {
+        for (int label2 : neighbors) {
+            // 중복 계산을 피하기 위해 (label1 < label2) 조건 사용
+            if (label1 < label2) {
+                // 두 라벨에 해당하는 평면이 모두 RANSAC으로 검출되었는지 확인
+                if (planes_by_label_.count(label1) == 0 || planes_by_label_.count(label2) == 0) {
+                    continue;
+                }
+                const auto& plane1 = planes_by_label_.at(label1);
+                const auto& plane2 = planes_by_label_.at(label2);
+
+                // --- 1. 무한 교선 계산 (이전과 동일) ---
+                Eigen::Vector3d n1(plane1.coefficients->values[0], plane1.coefficients->values[1], plane1.coefficients->values[2]);
+                double d1 = plane1.coefficients->values[3];
+                Eigen::Vector3d n2(plane2.coefficients->values[0], plane2.coefficients->values[1], plane2.coefficients->values[2]);
+                double d2 = plane2.coefficients->values[3];
+
+                Eigen::Vector3d dir = n1.cross(n2);
+                if (dir.norm() < 1e-6) continue;
+                dir.normalize();
+
+                Eigen::Matrix<double, 3, 2> A; A << n1, n2;
+                Eigen::Matrix2d AtA = A.transpose() * A;
+                if (AtA.determinant() < 1e-6) continue;
+                Eigen::Vector3d p0 = A * AtA.inverse() * Eigen::Vector2d(-d1, -d2);
+
+                // --- 2. 근접 영역의 점들만 수집 ---
+                pcl::PointCloud<pcl::PointXYZ>::Ptr vicinity_points(new pcl::PointCloud<pcl::PointXYZ>);
+
+                // Plane 1의 점들 중 Plane 2에 가까운 점들을 추가
+                for (const auto& pt : plane1.cloud->points) {
+                    double dist_to_plane2 = std::abs(pt.x * n2.x() + pt.y * n2.y() + pt.z * n2.z() + d2);
+                    if (dist_to_plane2 < clipping_vicinity_threshold) {
+                        vicinity_points->push_back(pt);
+                    }
+                }
+                // Plane 2의 점들 중 Plane 1에 가까운 점들을 추가
+                for (const auto& pt : plane2.cloud->points) {
+                    double dist_to_plane1 = std::abs(pt.x * n1.x() + pt.y * n1.y() + pt.z * n1.z() + d1);
+                    if (dist_to_plane1 < clipping_vicinity_threshold) {
+                        vicinity_points->push_back(pt);
+                    }
+                }
+
+                if (vicinity_points->empty()) continue;
+
+                // --- 3. 근접 영역 점들로만 클리핑 범위 계산 ---
+                double min_proj = std::numeric_limits<double>::max();
+                double max_proj = std::numeric_limits<double>::lowest();
+                for (const auto& pt : vicinity_points->points) {
                     Eigen::Vector3d p(pt.x, pt.y, pt.z);
                     double proj = (p - p0).dot(dir);
                     min_proj = std::min(min_proj, proj);
