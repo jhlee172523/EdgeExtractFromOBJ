@@ -35,7 +35,7 @@ void PlaneExtractor::buildAdjacencyGraph() {
         int label2 = vertices_[face.vertex_indices[1]].label_id;
         int label3 = vertices_[face.vertex_indices[2]].label_id;
         
-        // 한 면에 서로 다른 라벨이 존재하면, 해당 라벨들은 인접한 것입니다.
+        // 
         auto add_edge = [&](int u, int v) {
             if (u != v) {
                  plane_adjacency_graph_[u].insert(v);
@@ -128,7 +128,7 @@ void PlaneExtractor::detectPlanes(double distance_threshold) {
             }
         }
         
-        // Inlier에 해당하는 정점들의 원본 인덱스를 저장합니다.
+        // load Inlier points to original indices
         for (int index : inliers->indices) {
             plane.inlier_indices.push_back(original_indices[index]);
             plane.cloud->push_back(cloud->points[index]);
@@ -137,85 +137,28 @@ void PlaneExtractor::detectPlanes(double distance_threshold) {
     }
     std::cout << "Detected " << planes_by_label_.size() << " planes." << std::endl;
 }
-/*
-void PlaneExtractor::calculateIntersectionEdges() {
-    std::cout << "Step 4: Calculating intersection edges for adjacent planes..." << std::endl;
-    
-    // 라벨 인접 그래프를 순회하며 교선을 계산합니다.
-    for (const auto& [label1, neighbors] : plane_adjacency_graph_) {
-        for (int label2 : neighbors) {
-            // 중복 계산을 피하기 위해 (label1 < label2) 조건 사용
-            if (label1 < label2) {
-                // 두 라벨에 해당하는 평면이 모두 RANSAC으로 검출되었는지 확인
-                if (planes_by_label_.count(label1) == 0 || planes_by_label_.count(label2) == 0) {
-                    continue;
-                }
-                const auto& plane1 = planes_by_label_.at(label1);
-                const auto& plane2 = planes_by_label_.at(label2);
-
-                // 두 평면의 법선 벡터와 D 계수 추출
-                Eigen::Vector3d n1(plane1.coefficients->values[0], plane1.coefficients->values[1], plane1.coefficients->values[2]);
-                double d1 = plane1.coefficients->values[3];
-                Eigen::Vector3d n2(plane2.coefficients->values[0], plane2.coefficients->values[1], plane2.coefficients->values[2]);
-                double d2 = plane2.coefficients->values[3];
-
-                // 교선의 방향 벡터 계산 (두 법선 벡터의 외적)
-                Eigen::Vector3d dir = n1.cross(n2);
-                if (dir.norm() < 1e-6) continue; // 평면들이 거의 평행함
-                dir.normalize();
-
-                // 교선 위의 한 점 계산 (연립 방정식 풀이)
-                Eigen::Matrix<double, 3, 2> A; A << n1, n2;
-                Eigen::Matrix2d AtA = A.transpose() * A;
-                if (AtA.determinant() < 1e-6) continue;
-                Eigen::Vector3d p0 = A * AtA.inverse() * Eigen::Vector2d(-d1, -d2);
-
-                // 교선을 클리핑할 범위 계산 (두 평면의 점들을 모두 사용)
-                pcl::PointCloud<pcl::PointXYZ>::Ptr combined_cloud(new pcl::PointCloud<pcl::PointXYZ>(*plane1.cloud + *plane2.cloud));
-                if (combined_cloud->empty()) continue;
-
-                double min_proj = std::numeric_limits<double>::max();
-                double max_proj = std::numeric_limits<double>::lowest();
-                for (const auto& pt : combined_cloud->points) {
-                    Eigen::Vector3d p(pt.x, pt.y, pt.z);
-                    double proj = (p - p0).dot(dir);
-                    min_proj = std::min(min_proj, proj);
-                    max_proj = std::max(max_proj, proj);
-                }
-
-                if (min_proj < max_proj) {
-                    Eigen::Vector3d start_pt = p0 + min_proj * dir;
-                    Eigen::Vector3d end_pt = p0 + max_proj * dir;
-                    intersection_edges_.push_back({start_pt, end_pt});
-                }
-            }
-        }
-    }
-}
-*/
 
 /**
- * @brief 인접한 평면들 사이의 교선을 "근접 영역 클리핑"을 이용해 정확하게 계산합니다.
+ * @brief calculate edges using vicinity clipping 
  */
 void PlaneExtractor::calculateIntersectionEdges() {
     std::cout << "Step 4: Calculating intersection edges for adjacent planes using vicinity clipping..." << std::endl;
     
-    // 근접 영역을 정의하기 위한 거리 임계값. RANSAC 임계값의 몇 배 정도로 설정하면 좋습니다.
+    // vicinity threshold
     const double clipping_vicinity_threshold = 0.1; // 10cm 이내
 
-    // 라벨 인접 그래프를 순회하며 교선을 계산합니다.
+    // calculate edges using PAG
     for (const auto& [label1, neighbors] : plane_adjacency_graph_) {
         for (int label2 : neighbors) {
-            // 중복 계산을 피하기 위해 (label1 < label2) 조건 사용
             if (label1 < label2) {
-                // 두 라벨에 해당하는 평면이 모두 RANSAC으로 검출되었는지 확인
+                // 2 labels  are they extracted by RANSAC
                 if (planes_by_label_.count(label1) == 0 || planes_by_label_.count(label2) == 0) {
                     continue;
                 }
                 const auto& plane1 = planes_by_label_.at(label1);
                 const auto& plane2 = planes_by_label_.at(label2);
 
-                // --- 1. 무한 교선 계산 (이전과 동일) ---
+                // --- 1. calculate infinity line
                 Eigen::Vector3d n1(plane1.coefficients->values[0], plane1.coefficients->values[1], plane1.coefficients->values[2]);
                 double d1 = plane1.coefficients->values[3];
                 Eigen::Vector3d n2(plane2.coefficients->values[0], plane2.coefficients->values[1], plane2.coefficients->values[2]);
@@ -230,17 +173,17 @@ void PlaneExtractor::calculateIntersectionEdges() {
                 if (AtA.determinant() < 1e-6) continue;
                 Eigen::Vector3d p0 = A * AtA.inverse() * Eigen::Vector2d(-d1, -d2);
 
-                // --- 2. 근접 영역의 점들만 수집 ---
+                // --- 2. collect vicinity point
                 pcl::PointCloud<pcl::PointXYZ>::Ptr vicinity_points(new pcl::PointCloud<pcl::PointXYZ>);
 
-                // Plane 1의 점들 중 Plane 2에 가까운 점들을 추가
+                // add point of Plane 1 (close to Plane 2)
                 for (const auto& pt : plane1.cloud->points) {
                     double dist_to_plane2 = std::abs(pt.x * n2.x() + pt.y * n2.y() + pt.z * n2.z() + d2);
                     if (dist_to_plane2 < clipping_vicinity_threshold) {
                         vicinity_points->push_back(pt);
                     }
                 }
-                // Plane 2의 점들 중 Plane 1에 가까운 점들을 추가
+                // add point of Plane 1 (close to Plane 2)
                 for (const auto& pt : plane2.cloud->points) {
                     double dist_to_plane1 = std::abs(pt.x * n1.x() + pt.y * n1.y() + pt.z * n1.z() + d1);
                     if (dist_to_plane1 < clipping_vicinity_threshold) {
@@ -250,7 +193,7 @@ void PlaneExtractor::calculateIntersectionEdges() {
 
                 if (vicinity_points->empty()) continue;
 
-                // --- 3. 근접 영역 점들로만 클리핑 범위 계산 ---
+                // --- 3. t_max t_min
                 double min_proj = std::numeric_limits<double>::max();
                 double max_proj = std::numeric_limits<double>::lowest();
                 for (const auto& pt : vicinity_points->points) {
@@ -318,14 +261,14 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr PlaneExtractor::getColoredResultCloud() {
         }
     }
 
-    // RANSAC의 Inlier에 속하지 않은 모든 점들을 회색으로 표시
+    // outlier gray
     for (size_t i = 0; i < vertices_.size(); ++i) {
         if (!is_inlier[i]) {
             pcl::PointXYZRGB point;
             point.x = vertices_[i].pos.x();
             point.y = vertices_[i].pos.y();
             point.z = vertices_[i].pos.z();
-            point.r = 128; point.g = 128; point.b = 128; // 아웃라이어는 회색
+            point.r = 128; point.g = 128; point.b = 128; // outlier gray
             colored_cloud->push_back(point);
         }
     }
