@@ -32,6 +32,14 @@ bool saveResultPcd(const std::string& filename, const pcl::PointCloud<pcl::Point
 bool saveEdgesObj(const std::string& filename, const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& edges);
 
 /**
+ * @brief save modified mesh as OBJ
+ * @param filename file name
+ * @param vertices modified
+ * @param faces origin
+ */
+bool saveModifiedMeshOBJ(const std::string& filename, const std::vector<Vertex>& vertices, const std::vector<Face>& faces);
+
+/**
  * @brief save Bounding Box as obj
  * @param filename file name
  * @param min_bb min XYZ

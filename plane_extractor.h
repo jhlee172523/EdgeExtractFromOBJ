@@ -22,8 +22,9 @@ public:
      * @brief Entire Pipeline
      * (Group the Vertices -> Extract the Planes -> Generate the Patch Adjacency Graph -> Calculate the edges)
      * @param ransac_distance_threshold Threshold of RANSAC plane model
+     * @param vicinity_threshold Threshold of plane's vicinity
      */
-    void process(double ransac_distance_threshold);
+    void process(double ransac_distance_threshold, double vicinity_threshold);
 
     /**
      * @brief Generate point cloud of result (extract plane)
@@ -37,9 +38,20 @@ public:
      */
     const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& getIntersectionEdges() const;
 
+    /**
+     * @brief return modified vertices
+     */
+    const std::vector<Vertex>& getModifiedVertices() const;
+
+    /**
+     * @brief return original faces 
+     */
+    const std::vector<Face>& getOriginalFaces() const;
+
+
 private:
     // Input Data (Mesh)
-    std::vector<Vertex> vertices_;
+    std::vector<Vertex> vertices_; //vertices modified here
     std::vector<Face> faces_;
 
     // Check Data and Output Data
@@ -66,14 +78,20 @@ private:
 
 
     /**
-     * @brief 인접한 평면들 사이의 교선을 계산합니다.
+     * @brief calculate intersection line of adjacency plane 
      */
     void calculateIntersectionEdges();
 
     /**
-     * @brief 시각화를 위해 고유하고 구별되는 색상들을 생성합니다.
-     * @param num_colors 생성할 색상의 개수.
-     * @return (r,g,b) 색상 값의 벡터.
+     * @brief boundary vertices to intersection, make sharp edges
+     */
+    void snapBoundaryVerticesToIntersections(double vicinity_threshold);
+
+
+    /**
+     * @brief for visulization 
+     * @param num_colors #color
+     * @return (r,g,b) 
      */
     std::vector<Eigen::Vector3i> generateDistinctColors(int num_colors);
 };

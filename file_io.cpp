@@ -6,6 +6,9 @@
 #include <pcl/io/pcd_io.h>
 #include <iomanip> // for std::fixed and std::setprecision
 
+const int WHITE_THRESHOLD = 255;
+const int IGNORED_LABEL_ID = -1;
+
 /**
  * @brief Load OBJ (Mesh, colored vertices)
  * @param filename file name
@@ -85,13 +88,18 @@ bool loadObjWithColors(const std::string& filename, std::vector<Vertex>& out_ver
             }
 
             // 3. Generate Label ID
-            int color_key = (v.color.x() << 16) | (v.color.y() << 8) | v.color.z();
-            if (color_to_label_map.find(color_key) == color_to_label_map.end()) {
-                color_to_label_map[color_key] = next_label_id++;
+            if (v.color.x() > WHITE_THRESHOLD && v.color.y() > WHITE_THRESHOLD && v.color.z() > WHITE_THRESHOLD) {
+                v.label_id = IGNORED_LABEL_ID;
+            } else {
+                int color_key = (v.color.x() << 16) | (v.color.y() << 8) | v.color.z();
+                if (color_to_label_map.find(color_key) == color_to_label_map.end()) {
+                    color_to_label_map[color_key] = next_label_id++;
+                }
+                v.label_id = color_to_label_map[color_key];
             }
-            v.label_id = color_to_label_map[color_key];
             out_vertices.push_back(v);
 
+            /*
             // [Debug] first 5 vertices
             if (vertex_count < 5) {
                  std::cout << "  - Parsed vertex " << vertex_count << ": "
@@ -101,6 +109,7 @@ bool loadObjWithColors(const std::string& filename, std::vector<Vertex>& out_ver
                           << "label_id(" << v.label_id << ")" << std::endl;
             }
             vertex_count++;
+            */
 
         } else if (keyword == "f") {
             Face f;
@@ -141,6 +150,37 @@ bool saveEdgesObj(const std::string& filename, const std::vector<std::pair<Eigen
     std::cout << "Saved " << edges.size() << " intersection edges to " << filename << std::endl;
     return true;
 }
+
+bool saveModifiedMeshOBJ(const std::string& filename, const std::vector<Vertex>& vertices, const std::vector<Face>& faces) {
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error: Could not open file for writing: " << filename << std::endl;
+        return false;
+    }
+
+    file << "# Sharpened Mesh" << std::endl;
+    file << "# Vertices: " << vertices.size() << std::endl;
+    file << "# Faces: " << faces.size() << std::endl;
+
+    // write vertice data (modified xyz + origin color)
+    for (const auto& v : vertices) {
+        file << "v " << v.pos.x() << " " << v.pos.y() << " " << v.pos.z() 
+             << " " << v.color.x() / 255.0 << " " << v.color.y() / 255.0 << " " << v.color.z() / 255.0 << std::endl;
+    }
+
+    // write face data (same with origin)
+    for (const auto& f : faces) {
+        file << "f";
+        for (const auto& v_idx : f.vertex_indices) {
+            file << " " << v_idx + 1; // OBJ ->  1-based index
+        }
+        file << std::endl;
+    }
+
+    std::cout << "Saved sharpened mesh to " << filename << std::endl;
+    return true;
+}
+
 
 /**
  * @brief save 12 Edges of bounding box

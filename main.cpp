@@ -35,9 +35,11 @@ int main(int argc, char* argv[]) {
     // PlaneExtractor
     PlaneExtractor extractor(vertices, faces);
     // RANSAC Threshold
-    double ransac_threshold = 0.01; 
-    extractor.process(ransac_threshold);
+    double ransac_threshold = 0.01;
+    double vicinity_threshold = 0.05; 
+    extractor.process(ransac_threshold, vicinity_threshold);
 
+    /*
     // Colored Point Cloud as plane extraction by RANSAC 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr result_cloud = extractor.getColoredResultCloud();
     saveResultPcd("ransac_result.pcd", result_cloud);
@@ -45,7 +47,9 @@ int main(int argc, char* argv[]) {
     // Edge
     const auto& edges = extractor.getIntersectionEdges();
     saveEdgesObj("intersection_edges.obj", edges);
-
+    */
+    
+    saveModifiedMeshOBJ("sharpend_mesh.obj", extractor.getModifiedVertices(), extractor.getOriginalFaces());
     std::cout << "\nAll processes are complete. Check 'ransac_result.pcd' and 'intersection_edges.obj'." << std::endl;
 
     return 0;

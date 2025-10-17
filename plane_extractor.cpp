@@ -3,21 +3,23 @@
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/filters/extract_indices.h>
 
+const int IGNORED_LABEL_ID = -1;
 PlaneExtractor::PlaneExtractor(std::vector<Vertex> vertices, std::vector<Face> faces)
     : vertices_(std::move(vertices)), faces_(std::move(faces)) {}
 
-void PlaneExtractor::process(double ransac_distance_threshold) {
+void PlaneExtractor::process(double ransac_distance_threshold, double vicinity_threshold) {
     std::cout << "\n--- Starting Processing ---" << std::endl;
     groupPointsByLabel();
     buildAdjacencyGraph();
     detectPlanes(ransac_distance_threshold);
-    calculateIntersectionEdges();
+    snapBoundaryVerticesToIntersections(vicinity_threshold);
     std::cout << "--- Processing Finished ---\n" << std::endl;
 }
 
 void PlaneExtractor::groupPointsByLabel() {
     std::cout << "Step 1: Grouping points by label..." << std::endl;
     for (const auto& v : vertices_) {
+        if(v.label_id == IGNORED_LABEL_ID) continue; // ignore white color label
         if (grouped_points_by_label_.find(v.label_id) == grouped_points_by_label_.end()) {
             grouped_points_by_label_[v.label_id] = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
         }
@@ -28,26 +30,6 @@ void PlaneExtractor::groupPointsByLabel() {
 
 void PlaneExtractor::buildAdjacencyGraph() {
     std::cout << "Step 2: Building plane adjacency graph from input mesh..." << std::endl;
-    /*
-    for (const auto& face : faces_) {
-        // label ID from vertices of plane
-        int label1 = vertices_[face.vertex_indices[0]].label_id;
-        int label2 = vertices_[face.vertex_indices[1]].label_id;
-        int label3 = vertices_[face.vertex_indices[2]].label_id;
-        
-        // 
-        auto add_edge = [&](int u, int v) {
-            if (u != v) {
-                 plane_adjacency_graph_[u].insert(v);
-                 plane_adjacency_graph_[v].insert(u);
-            }
-        };
-        add_edge(label1, label2);
-        add_edge(label1, label3);
-        add_edge(label2, label3);
-    }
-    */
-    
     // 1단계: 두 라벨 사이의 공유 엣지 개수를 센다.
     // std::map<정렬된 라벨 쌍, 엣지 개수>
     std::map<std::pair<int, int>, int> edge_counts;
@@ -60,7 +42,7 @@ void PlaneExtractor::buildAdjacencyGraph() {
             int label1 = vertices_[v1_idx].label_id;
             int label2 = vertices_[v2_idx].label_id;
 
-            if (label1 != label2) {
+            if (label1 != label2 && label1 != IGNORED_LABEL_ID && label2 != IGNORED_LABEL_ID) {
                 // 항상 (작은 라벨, 큰 라벨) 순서로 키를 만들어 중복을 방지합니다.
                 if (label1 > label2) std::swap(label1, label2);
                 edge_counts[{label1, label2}]++;
@@ -136,6 +118,75 @@ void PlaneExtractor::detectPlanes(double distance_threshold) {
         planes_by_label_[label_id] = plane;
     }
     std::cout << "Detected " << planes_by_label_.size() << " planes." << std::endl;
+}
+void PlaneExtractor::snapBoundaryVerticesToIntersections(double vicinity_threshold) {
+    std::cout << "Step 4: Snapping boundary vertices to ideal intersections..." << std::endl;
+
+    // Key: 정점 인덱스, Value: 해당 정점이 투영될 위치들의 목록
+    std::map<int, std::vector<Eigen::Vector3d>> vertex_projections;
+    
+    // for stabilizing
+    const double parallel_threshold = 0.99;
+
+    // 1. 모든 인접 평면 쌍에 대해, 경계 정점들의 새로운 위치를 계산한다.
+    for (const auto& [label1, neighbors] : plane_adjacency_graph_) {
+        for (int label2 : neighbors) {
+            if (label1 >= label2) continue; // 중복 계산 방지
+
+            if (planes_by_label_.count(label1) == 0 || planes_by_label_.count(label2) == 0) continue;
+            
+            const auto& plane1 = planes_by_label_.at(label1);
+            const auto& plane2 = planes_by_label_.at(label2);
+
+            // 무한 교선 계산
+            Eigen::Vector3d n1(plane1.coefficients->values[0], plane1.coefficients->values[1], plane1.coefficients->values[2]);
+            double d1 = plane1.coefficients->values[3];
+            Eigen::Vector3d n2(plane2.coefficients->values[0], plane2.coefficients->values[1], plane2.coefficients->values[2]);
+            double d2 = plane2.coefficients->values[3];
+            
+                        
+            //for stabilizaing
+            if (std::abs(n1.dot(n2)) > parallel_threshold) {
+                // std::cout << "  - Skipping nearly parallel planes: " << label1 << " and " << label2 << std::endl;
+                continue; // 두 평면이 거의 평행하므로 계산을 건너뜁니다.
+            }
+
+            Eigen::Vector3d dir = n1.cross(n2);
+            if (dir.norm() < 1e-6) continue;
+            dir.normalize();
+            Eigen::Matrix<double, 3, 2> A; A << n1, n2;
+            Eigen::Matrix2d AtA = A.transpose() * A;
+            if (AtA.determinant() < 1e-6) continue;
+            Eigen::Vector3d p0 = A * AtA.inverse() * Eigen::Vector2d(-d1, -d2);
+
+            // 경계 정점들을 찾아 교선에 투영한 위치를 저장
+            for (size_t i = 0; i < vertices_.size(); ++i) {
+                const auto& v = vertices_[i];
+                double dist_to_plane1 = std::abs(v.pos.dot(n1) + d1);
+                double dist_to_plane2 = std::abs(v.pos.dot(n2) + d2);
+
+                if (v.label_id == label1 && dist_to_plane2 < vicinity_threshold) {
+                    Eigen::Vector3d p_new = p0 + (v.pos - p0).dot(dir) * dir;
+                    vertex_projections[i].push_back(p_new);
+                } else if (v.label_id == label2 && dist_to_plane1 < vicinity_threshold) {
+                    Eigen::Vector3d p_new = p0 + (v.pos - p0).dot(dir) * dir;
+                    vertex_projections[i].push_back(p_new);
+                }
+            }
+        }
+    }
+
+    // 2. 계산된 새 위치들을 실제 정점 좌표에 적용한다.
+    std::cout << "Applying " << vertex_projections.size() << " vertex modifications..." << std::endl;
+    for (const auto& [v_idx, projections] : vertex_projections) {
+        Eigen::Vector3d final_pos(0, 0, 0);
+        for (const auto& p : projections) {
+            final_pos += p;
+        }
+        final_pos /= projections.size(); // 코너 정점의 경우, 여러 투영 위치의 평균값을 사용
+        
+        vertices_[v_idx].pos = final_pos;
+    }
 }
 
 /**
@@ -268,7 +319,11 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr PlaneExtractor::getColoredResultCloud() {
             point.x = vertices_[i].pos.x();
             point.y = vertices_[i].pos.y();
             point.z = vertices_[i].pos.z();
-            point.r = 128; point.g = 128; point.b = 128; // outlier gray
+            if (vertices_[i].label_id == IGNORED_LABEL_ID){
+               point.r = 255; point.g = 255; point.b = 255; 
+            } else {
+                point.r = 128; point.g = 128; point.b = 128; // outlier gray
+            }
             colored_cloud->push_back(point);
         }
     }
@@ -278,4 +333,13 @@ pcl::PointCloud<pcl::PointXYZRGB>::Ptr PlaneExtractor::getColoredResultCloud() {
 const std::vector<std::pair<Eigen::Vector3d, Eigen::Vector3d>>& PlaneExtractor::getIntersectionEdges() const {
     return intersection_edges_;
 }
+
+const std::vector<Vertex>& PlaneExtractor::getModifiedVertices() const {
+    return vertices_;
+}
+
+const std::vector<Face>& PlaneExtractor::getOriginalFaces() const {
+    return faces_;
+}
+
 

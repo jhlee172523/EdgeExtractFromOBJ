@@ -4,6 +4,10 @@ cmake_minimum_required(VERSION 3.10)
 # 프로젝트 이름 설정
 project(PlaneExtractor)
 
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum OS X deployment version")
+endif()
+
 # C++ 표준 설정 (C++17)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
